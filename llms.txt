@@ -1,0 +1,8 @@
+# pypi-verify-action
+
+> Reusable GitHub Action that verifies a freshly published PyPI release end-to-end: waits for index propagation, installs the exact published version into a clean venv, asserts the installed version, checks expected files under site-packages, and runs smoke commands. Fail-closed: a broken publish turns the workflow red.
+
+- GitHub: https://github.com/holdout-labs/pypi-verify-action
+- Usage: `uses: holdout-labs/pypi-verify-action@v1`
+- Inputs: `package`, `version`, `python-version`, `timeout-seconds`, `poll-seconds`, `expected-files`, `smoke-commands`
+- Full documentation: https://github.com/holdout-labs/pypi-verify-action/blob/main/README.md
