@@ -1,0 +1,131 @@
+name: pypi-verify-action
+description: >-
+  Verify a freshly published PyPI release end-to-end: wait for index
+  propagation, install the exact published version into a clean venv, assert
+  the installed version, check expected package files, and run smoke
+  commands. Fail-closed: a broken publish turns the workflow red.
+
+author: holdout-labs
+
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  package:
+    description: PyPI project name to verify
+    required: true
+  version:
+    description: Version that was just published
+    required: true
+  python-version:
+    description: Python version for the verification venv
+    required: false
+    default: "3.11"
+  timeout-seconds:
+    description: Max seconds to wait for PyPI index propagation
+    required: false
+    default: "300"
+  poll-seconds:
+    description: Poll interval while waiting for propagation
+    required: false
+    default: "10"
+  expected-files:
+    description: >-
+      Optional newline-separated globs (relative to site-packages) that must
+      exist in the installed package, e.g. falsification_ledger/schema/*.json
+    required: false
+    default: ""
+  smoke-commands:
+    description: >-
+      Optional newline-separated shell commands to run inside the fresh venv
+      with the published package installed (any non-zero exit fails the job).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Wait for PyPI index propagation
+      shell: bash
+      env:
+        PKG: ${{ inputs.package }}
+        VER: ${{ inputs.version }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+        POLL: ${{ inputs.poll-seconds }}
+      run: |
+        python - "$PKG" "$VER" "$TIMEOUT" "$POLL" <<'PY'
+        import json, sys, time, urllib.request
+        pkg, ver, timeout, poll = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(
+                    f"https://pypi.org/pypi/{pkg}/json?x={time.time()}", timeout=15
+                ) as resp:
+                    data = json.load(resp)
+                files = (data.get("releases") or {}).get(ver) or []
+                if files:
+                    print(f"PyPI index shows {pkg}=={ver} with {len(files)} file(s)")
+                    sys.exit(0)
+            except Exception as exc:  # noqa: BLE001 - transient network/index errors
+                print(f"poll error (will retry): {exc}")
+            time.sleep(poll)
+        print(f"TIMEOUT: {pkg}=={ver} did not appear on PyPI within {timeout}s")
+        sys.exit(1)
+        PY
+
+    - name: Fresh-venv install of the published version
+      shell: bash
+      run: |
+        python -m venv /tmp/pypi-verify-venv
+        /tmp/pypi-verify-venv/bin/pip install --quiet --no-cache-dir "${{ inputs.package }}==${{ inputs.version }}"
+        /tmp/pypi-verify-venv/bin/python - <<'PY'
+        import importlib.metadata as md
+        expected = "${{ inputs.version }}"
+        actual = md.version("${{ inputs.package }}")
+        assert actual == expected, f"installed {actual}, expected {expected}"
+        print(f"installed version OK: {actual}")
+        PY
+
+    - name: Check expected files under site-packages
+      if: inputs.expected-files != ''
+      shell: bash
+      env:
+        EXPECTED: ${{ inputs.expected-files }}
+      run: |
+        /tmp/pypi-verify-venv/bin/python - <<'PY'
+        import glob, os, site, sys
+        sp = site.getsitepackages()[0]
+        missing = []
+        for pattern in os.environ["EXPECTED"].splitlines():
+            pattern = pattern.strip()
+            if not pattern:
+                continue
+            if not glob.glob(os.path.join(sp, pattern)):
+                missing.append(pattern)
+        if missing:
+            print("missing expected files under site-packages:", missing)
+            sys.exit(1)
+        print("expected files present under site-packages")
+        PY
+
+    - name: Run smoke commands in the fresh venv
+      if: inputs.smoke-commands != ''
+      shell: bash
+      env:
+        CMDS: ${{ inputs.smoke-commands }}
+      run: |
+        export PATH="/tmp/pypi-verify-venv/bin:$PATH"
+        while IFS= read -r line || [ -n "$line" ]; do
+          line="${line%"${line##*[![:space:]]}"}"
+          [ -z "$line" ] && continue
+          echo ">> $line"
+          bash -c "$line"
+        done <<< "$CMDS"
+        echo "all smoke commands passed"

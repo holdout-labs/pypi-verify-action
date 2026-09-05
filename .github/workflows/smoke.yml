@@ -1,0 +1,44 @@
+name: smoke
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  verify-known-good-release:
+    name: Verify a known-good published release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the action against falsification-ledger 0.1.3 (published)
+        uses: ./
+        with:
+          package: falsification-ledger
+          version: 0.1.3
+          expected-files: |
+            falsification_ledger/schema/*.json
+          smoke-commands: |
+            fl version
+            fl demo
+
+  fail-closed-on-bad-version:
+    name: Expect failure for a nonexistent version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the action with a version that does not exist
+        id: bad
+        continue-on-error: true
+        uses: ./
+        with:
+          package: falsification-ledger
+          version: 999.0.0
+          timeout-seconds: "30"
+          poll-seconds: "5"
+      - name: Assert the action failed closed
+        run: |
+          if [ "${{ steps.bad.outcome }}" == "success" ]; then
+            echo "expected the action to fail for version 999.0.0"
+            exit 1
+          fi
+          echo "fail-closed OK"
