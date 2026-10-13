@@ -10,7 +10,7 @@ between "uploaded" and "verified":
 
 1. **Waits for PyPI index propagation** (the JSON API lags the upload).
 2. **Installs the exact published version** (`pkg==version`) into a clean
-   venv with `--no-cache-dir` — what users will actually get.
+   venv with `--no-cache-dir` from `https://pypi.org/simple` — what users actually get.
 3. **Asserts the installed version** matches the one you intended to publish.
 4. **Checks expected files** under site-packages (e.g. bundled schemas).
 5. **Runs your smoke commands** inside that venv.
@@ -21,7 +21,7 @@ Any failure turns the workflow red.
 
 ```yaml
 steps:
-  - uses: holdout-labs/pypi-verify-action@v1
+  - uses: holdout-labs/pypi-verify-action@v1.1.0
     with:
       package: falsification-ledger
       version: 0.1.4            # the version you just uploaded
@@ -32,8 +32,23 @@ steps:
         fl --help
 ```
 
-Place it in the same workflow right after the upload step (or in a
-`workflow_dispatch` "verify latest" workflow you can run anytime).
+Place it in the same workflow right after the separate upload step, or invoke it
+manually with an exact version. It does not upload a release. Pin `uses` to an
+immutable commit SHA for reproducibility; a moving `v1` tag may change.
+
+Holdout package repositories use `verify-pypi.yml`, triggered by a published
+GitHub release or an explicit manual version. Pin the reviewed action commit,
+rather than `main`, when wiring the verifier. A GitHub release published before
+uploading to PyPI fails verification until the exact version appears; rerun
+after upload. The existing `v1` tag is retained; use `v1.1.0` or its commit SHA
+to select this update explicitly.
+
+Version `v1.1.0` uses a unique disposable venv on Windows and Linux,
+pins the public PyPI index, runs smoke commands outside the source checkout and
+removes the temporary directory after success or failure. It ignores host Python
+path overrides and rejects expected-file globs that escape site-packages.
+Smoke commands are trusted workflow code, executed via
+Bash; do not populate them from pull-request text or other untrusted input.
 
 ## Inputs
 
